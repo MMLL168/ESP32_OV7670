@@ -23,8 +23,8 @@
 #define OV7670_D1       33    // 數據位 1
 #define OV7670_D2       34    // 數據位 2
 #define OV7670_D3       35    // 數據位 3
-#define OV7670_D4       36    // 數據位 4
-#define OV7670_D5       39    // 數據位 5
+#define OV7670_D4       16//36    // 數據位 4
+#define OV7670_D5       17//39    // 數據位 5
 #define OV7670_D6       18    // 數據位 6
 #define OV7670_D7       19    // 數據位 7
 
@@ -134,14 +134,225 @@ void generateTestImage();
 void captureFrame() {
     // 重置緩衝區狀態
     fb.is_ready = false;
+    bool captureSuccess = false;
     
-    // 由於沒有連接實際相機，使用模擬圖像
-    Serial.println("生成模擬測試圖像...");
-    generateTestImage();
+    Serial.println("從相機捕獲圖像...");
     
-    fb.is_ready = true;
-    newFrameAvailable = true;
-    Serial.println("模擬圖像生成完成");
+    // 設置超時時間（毫秒）
+    const unsigned long timeout = 5000;  // 5秒超時
+    unsigned long startTime = millis();
+    
+    // 設置引腳模式為INPUT
+    pinMode(OV7670_D0, INPUT);
+    pinMode(OV7670_D1, INPUT);
+    pinMode(OV7670_D2, INPUT);
+    pinMode(OV7670_D3, INPUT);
+    pinMode(OV7670_D4, INPUT);
+    pinMode(OV7670_D5, INPUT);
+    pinMode(OV7670_D6, INPUT);
+    pinMode(OV7670_D7, INPUT);
+    pinMode(OV7670_VSYNC, INPUT);
+    pinMode(OV7670_HREF, INPUT);
+    pinMode(OV7670_PCLK, INPUT);
+    
+    // 等待VSYNC信號開始
+    Serial.println("等待VSYNC信號...");
+    bool vsyncDetected = false;
+    
+    // 等待VSYNC從HIGH到LOW再到HIGH的完整循環
+    for (int i = 0; i < 100 && !vsyncDetected; i++) {
+        if (digitalRead(OV7670_VSYNC) == HIGH) {
+            while (digitalRead(OV7670_VSYNC) == HIGH) {
+                if (millis() - startTime > timeout) {
+                    Serial.println("等待VSYNC HIGH->LOW超時！");
+                    break;
+                }
+            }
+            
+            if (millis() - startTime > timeout) break;
+            
+            while (digitalRead(OV7670_VSYNC) == LOW) {
+                if (millis() - startTime > timeout) {
+                    Serial.println("等待VSYNC LOW->HIGH超時！");
+                    break;
+                }
+            }
+            
+            if (millis() - startTime > timeout) break;
+            
+            vsyncDetected = true;
+            break;
+        }
+        delay(10); // 短暫延遲，避免CPU過載
+    }
+    
+    if (!vsyncDetected) {
+        Serial.println("未檢測到VSYNC信號！");
+    } else {
+        Serial.println("VSYNC檢測到，開始捕獲幀");
+        
+        // 開始捕獲一幀
+        uint32_t idx = 0;
+        bool frameComplete = false;
+        
+        // 捕獲一整幀數據
+        for(int y = 0; y < FRAME_HEIGHT && !frameComplete; y++) {
+            // 檢查是否超時
+            if (millis() - startTime > timeout) {
+                Serial.println("捕獲幀超時！");
+                break;
+            }
+            
+            // 等待行開始
+            unsigned long lineStartTime = millis();
+            bool hrefDetected = false;
+            
+            // 嘗試多次檢測HREF信號
+            for (int i = 0; i < 100 && !hrefDetected; i++) {
+                if (digitalRead(OV7670_HREF) == HIGH) {
+                    hrefDetected = true;
+                    break;
+                }
+                
+                if (millis() - lineStartTime > 500) {  // 500ms行超時
+                    Serial.println("等待HREF HIGH超時！");
+                    frameComplete = true;
+                    break;
+                }
+                
+                delayMicroseconds(100);  // 微秒級延遲
+            }
+            
+            if (!hrefDetected || frameComplete) {
+                Serial.println("未檢測到HREF或已超時");
+                break;
+            }
+            
+            // 捕獲一行數據
+            for(int x = 0; x < FRAME_WIDTH && !frameComplete; x++) {
+                // 檢查是否超時
+                if (millis() - startTime > timeout) {
+                    Serial.println("捕獲像素超時！");
+                    frameComplete = true;
+                    break;
+                }
+                
+                // 等待PCLK上升沿，添加短超時
+                unsigned long pixelStartTime = millis();
+                while(digitalRead(OV7670_PCLK) == HIGH) {
+                    if (millis() - pixelStartTime > 10) {  // 10ms像素超時
+                        Serial.println("等待PCLK HIGH超時！");
+                        frameComplete = true;
+                        break;
+                    }
+                }
+                
+                if (frameComplete) break;
+                
+                while(digitalRead(OV7670_PCLK) == LOW) {
+                    if (millis() - pixelStartTime > 10) {  // 10ms像素超時
+                        Serial.println("等待PCLK LOW超時！");
+                        frameComplete = true;
+                        break;
+                    }
+                }
+                
+                if (frameComplete) break;
+                
+                // 讀取高字節 (D7-D0)
+                uint8_t high = 
+                    ((digitalRead(OV7670_D7) << 7) |
+                     (digitalRead(OV7670_D6) << 6) |
+                     (digitalRead(OV7670_D5) << 5) |
+                     (digitalRead(OV7670_D4) << 4) |
+                     (digitalRead(OV7670_D3) << 3) |
+                     (digitalRead(OV7670_D2) << 2) |
+                     (digitalRead(OV7670_D1) << 1) |
+                     digitalRead(OV7670_D0));
+                
+                // 等待PCLK下一個上升沿
+                while(digitalRead(OV7670_PCLK) == HIGH) {
+                    if (millis() - pixelStartTime > 10) {  // 10ms像素超時
+                        Serial.println("等待第二個PCLK HIGH超時！");
+                        frameComplete = true;
+                        break;
+                    }
+                }
+                
+                if (frameComplete) break;
+                
+                while(digitalRead(OV7670_PCLK) == LOW) {
+                    if (millis() - pixelStartTime > 10) {  // 10ms像素超時
+                        Serial.println("等待第二個PCLK LOW超時！");
+                        frameComplete = true;
+                        break;
+                    }
+                }
+                
+                if (frameComplete) break;
+                
+                // 讀取低字節 (D7-D0)
+                uint8_t low = 
+                    ((digitalRead(OV7670_D7) << 7) |
+                     (digitalRead(OV7670_D6) << 6) |
+                     (digitalRead(OV7670_D5) << 5) |
+                     (digitalRead(OV7670_D4) << 4) |
+                     (digitalRead(OV7670_D3) << 3) |
+                     (digitalRead(OV7670_D2) << 2) |
+                     (digitalRead(OV7670_D1) << 1) |
+                     digitalRead(OV7670_D0));
+                
+                // 存儲像素數據
+                if(idx < BUFFER_SIZE - 1) {
+                    fb.buffer[idx++] = high;
+                    fb.buffer[idx++] = low;
+                }
+            }
+            
+            // 等待行結束，添加短超時
+            unsigned long lineEndTime = millis();
+            while(digitalRead(OV7670_HREF) == HIGH) {
+                if (millis() - lineEndTime > 100) {  // 100ms行結束超時
+                    Serial.println("等待HREF LOW超時！");
+                    frameComplete = true;
+                    break;
+                }
+            }
+        }
+        
+        // 等待VSYNC結束，添加超時檢查
+        unsigned long vsyncEndTime = millis();
+        while(digitalRead(OV7670_VSYNC) == HIGH) {
+            if (millis() - vsyncEndTime > 100) {  // 100ms VSYNC結束超時
+                Serial.println("等待VSYNC結束超時！");
+                break;
+            }
+        }
+        
+        if (idx > 0) {
+            Serial.print("成功捕獲 ");
+            Serial.print(idx / 2);
+            Serial.println(" 個像素");
+            captureSuccess = true;
+        }
+    }
+    
+    if (captureSuccess) {
+        Serial.println("圖像捕獲成功");
+        fb.is_ready = true;
+        newFrameAvailable = true;
+    } else {
+        Serial.println("相機捕獲失敗，使用測試圖像代替");
+        
+        // 嘗試使用相機的測試模式
+        camera.setTestPattern(OV7670_TESTPATTERN_BAR_8);
+        delay(100);
+        
+        // 生成測試圖像
+        generateTestImage();
+        fb.is_ready = true;
+        newFrameAvailable = true;
+    }
 }
 
 // 生成測試圖像的函數
@@ -261,7 +472,6 @@ void generateTestImage() {
 void loop() {
     // 檢查WiFi連接狀態
     static unsigned long lastWiFiCheckTime = 0;
-    static unsigned long lastCaptureTime = 0;
     unsigned long currentTime = millis();
     
     // 每5秒檢查一次WiFi連接狀態
@@ -292,20 +502,8 @@ void loop() {
     // 處理網頁服務器客戶端請求
     server.handleClient();
     
-    // 每500毫秒生成一幀模擬圖像
-    if (currentTime - lastCaptureTime > 500) {
-        captureFrame();
-        lastCaptureTime = currentTime;
-        
-        // 每10幀打印一次調試信息
-        static int frameCount = 0;
-        frameCount++;
-        if (frameCount % 10 == 0) {
-            Serial.print("已生成 ");
-            Serial.print(frameCount);
-            Serial.println(" 幀模擬圖像");
-        }
-    }
+    // 不再主動捕獲圖像，只在網頁請求時捕獲
+    // 這樣可以減少系統負擔
 }
 
 
@@ -437,6 +635,34 @@ void setupServer() {
         handleCapture();
     });
     
+    // 添加測試模式路由 - 修正測試模式選項
+    server.on("/test_pattern", HTTP_GET, []() {
+        String pattern = server.arg("mode");
+        int mode = pattern.toInt();
+        
+        Serial.print("設置測試模式: ");
+        Serial.println(mode);
+        
+        switch(mode) {
+            case 0:
+                camera.setTestPattern(OV7670_TESTPATTERN_NONE);
+                server.send(200, "text/plain", "已關閉測試模式");
+                break;
+            case 1:
+                camera.setTestPattern(OV7670_TESTPATTERN_BAR_8);
+                server.send(200, "text/plain", "已設置為彩條測試模式");
+                break;
+            case 2:
+                // 使用不同的測試模式，因為FADE不可用
+                camera.setTestPattern(OV7670_TESTPATTERN_BAR_8); // 重複使用彩條模式
+                server.send(200, "text/plain", "已設置為測試模式2");
+                break;
+            default:
+                server.send(400, "text/plain", "無效的測試模式");
+                break;
+        }
+    });
+    
     // 添加一個簡單的測試路由
     server.on("/test", HTTP_GET, []() {
         Serial.println("收到測試請求");
@@ -458,37 +684,56 @@ void setupServer() {
 }
 
 void handleRoot() {
-    String html = "<!DOCTYPE html>\
-    <html>\
-    <head>\
-        <title>ESP32 OV7670 相機</title>\
-        <meta name='viewport' content='width=device-width, initial-scale=1'>\
-        <style>\
-            body { font-family: Arial; text-align: center; margin: 0px auto; }\
-            img { width: 320px; height: 240px; }\
-            .button { background-color: #4CAF50; border: none; color: white; padding: 10px 20px;\
-                    text-align: center; text-decoration: none; display: inline-block;\
-                    font-size: 16px; margin: 4px 2px; cursor: pointer; }\
-        </style>\
-        <script>\
-            function refreshImage() {\
-                var img = document.getElementById('cameraImage');\
-                img.src = '/capture?' + new Date().getTime();\
-            }\
-            \
-            function startStream() {\
-                setInterval(refreshImage, 1000);\
-            }\
-        </script>\
-    </head>\
-    <body onload='startStream()'>\
-        <h1>ESP32 OV7670 相機畫面</h1>\
-        <img id='cameraImage' src='/capture'>\
-        <p><button class='button' onclick='refreshImage()'>刷新圖像</button></p>\
-    </body>\
-    </html>";
+    String html = "<!DOCTYPE html>"
+    "<html>"
+    "<head>"
+        "<title>ESP32 OV7670 相機</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<meta charset='UTF-8'>"  // 添加UTF-8字符集聲明
+        "<style>"
+            "body { font-family: Arial, 'Microsoft JhengHei', sans-serif; text-align: center; margin: 0px auto; }"
+            "img { width: 320px; height: 240px; }"
+            ".button { background-color: #4CAF50; border: none; color: white; padding: 10px 20px;"
+                    "text-align: center; text-decoration: none; display: inline-block;"
+                    "font-size: 16px; margin: 4px 2px; cursor: pointer; }"
+            ".button-test { background-color: #2196F3; }"
+        "</style>"
+        "<script>"
+            "function refreshImage() {"
+                "var img = document.getElementById('cameraImage');"
+                "img.src = '/capture?' + new Date().getTime();"
+            "}"
+            ""
+            "function startStream() {"
+                "setInterval(refreshImage, 1000);"
+            "}"
+            ""
+            "function setTestPattern(mode) {"
+                "fetch('/test_pattern?mode=' + mode)"
+                    ".then(response => response.text())"
+                    ".then(text => {"
+                        "document.getElementById('status').innerText = text;"
+                        "setTimeout(refreshImage, 500);"
+                    "});"
+            "}"
+        "</script>"
+    "</head>"
+    "<body onload='startStream()'>"
+        "<h1>ESP32 OV7670 相機畫面</h1>"
+        "<img id='cameraImage' src='/capture'>"
+        "<p><button class='button' onclick='refreshImage()'>刷新圖像</button></p>"
+        "<div>"
+            "<p>測試模式:</p>"
+            "<button class='button button-test' onclick='setTestPattern(0)'>關閉測試模式</button>"
+            "<button class='button button-test' onclick='setTestPattern(1)'>彩條測試</button>"
+            "<button class='button button-test' onclick='setTestPattern(2)'>測試模式2</button>"
+        "</div>"
+        "<p id='status'></p>"
+    "</body>"
+    "</html>";
     
-    server.send(200, "text/html", html);
+    // 設置正確的Content-Type頭，包含字符集
+    server.send(200, "text/html; charset=utf-8", html);
 }
 
 void handleStream() {
@@ -500,12 +745,13 @@ void handleStream() {
 void handleCapture() {
     Serial.println("處理圖像捕獲請求...");
     
-    // 確保有最新的圖像
+    // 嘗試從相機捕獲圖像
     captureFrame();
     
+    // 如果捕獲失敗，使用測試圖像並通知用戶
     if (!fb.is_ready) {
-        Serial.println("錯誤：相機未就緒，無法提供圖像");
-        server.send(503, "text/plain", "相機未就緒");
+        Serial.println("相機捕獲完全失敗，無法提供圖像");
+        server.send(503, "text/plain", "相機捕獲失敗");
         return;
     }
     
@@ -571,17 +817,61 @@ void handleCapture() {
     Serial.println("BMP圖像發送完成");
 }
 
+
 bool setupCamera() {
-    Serial.println("開始設置相機模擬環境...");
+    Serial.println("開始設置實際相機...");
     
-    // 由於沒有實際相機連接，我們跳過實際的相機初始化
-    Serial.println("注意：沒有實際相機連接，將使用模擬圖像");
+    // 配置相機參數
+    camera_config_t config;
+    config.pin_reset = (gpio_num_t)OV7670_RESET;
+    config.pin_xclk = (gpio_num_t)OV7670_XCLK;
+    config.pin_sscb_sda = (gpio_num_t)SCCB_SDA_PIN;
+    config.pin_sscb_scl = (gpio_num_t)SCCB_SCL_PIN;
+    config.pin_d7 = (gpio_num_t)OV7670_D7;
+    config.pin_d6 = (gpio_num_t)OV7670_D6;
+    config.pin_d5 = (gpio_num_t)OV7670_D5;
+    config.pin_d4 = (gpio_num_t)OV7670_D4;
+    config.pin_d3 = (gpio_num_t)OV7670_D3;
+    config.pin_d2 = (gpio_num_t)OV7670_D2;
+    config.pin_d1 = (gpio_num_t)OV7670_D1;
+    config.pin_d0 = (gpio_num_t)OV7670_D0;
+    config.pin_vsync = (gpio_num_t)OV7670_VSYNC;
+    config.pin_href = (gpio_num_t)OV7670_HREF;
+    config.pin_pclk = (gpio_num_t)OV7670_PCLK;
     
-    // 初始化一個測試圖像
-    generateTestImage();
-    fb.is_ready = true;
+    // 設置時鐘頻率為16MHz
+    config.xclk_freq_hz = 16000000;
     
-    Serial.println("模擬相機環境設置完成");
+    // 使用LEDC定時器0和通道0
+    config.ledc_timer = LEDC_TIMER_0;
+    config.ledc_channel = LEDC_CHANNEL_0;
+    
+    // 初始化相機
+    if (!camera.init(config)) {
+        Serial.println("相機初始化失敗！嘗試降低時鐘頻率...");
+        
+        // 嘗試降低時鐘頻率
+        config.xclk_freq_hz = 10000000;  // 10MHz
+        if (!camera.init(config)) {
+            Serial.println("相機初始化仍然失敗！");
+            return false;
+        }
+    }
+    
+    // 輸出相機配置信息
+    camera.dump();
+    
+    // 設置為RGB565格式
+    camera.setFormat(OV7670_FORMAT_RGB);
+    camera.setRGBFormat(OV7670_FORMAT_RGB_RGB_565);
+    
+    // 使用公開方法設置相機參數
+    camera.setTestPattern(OV7670_TESTPATTERN_NONE);  // 關閉測試模式
+    
+    // 等待設置生效
+    delay(300);
+    
+    Serial.println("相機設置完成");
     return true;
 }
  
