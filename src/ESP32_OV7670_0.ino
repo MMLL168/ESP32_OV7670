@@ -31,9 +31,10 @@
 // WiFi 設定
 //const char* ssid = "TP-Link_AA66";      // 請修改為您的 WiFi 名稱
 //const char* password = "40399799";  // 請修改為您的 WiFi 密碼
-const char* ssid = "MLI16P";      // 請修改為您的 WiFi 名稱
-const char* password = "lynnaaaa";  // 請修改為您的 WiFi 密碼
-
+//const char* ssid = "MLI16P";      // 請修改為您的 WiFi 名稱
+//const char* password = "lynnaaaa";  // 請修改為您的 WiFi 密碼.
+const char* ssid = "IT-AP13";               // 請修改為您的 WiFi 名稱
+const char* password = "greentea80342958";  // 請修改為您的 WiFi 密碼
 // WiFi連接超時設定（毫秒）
 #define WIFI_TIMEOUT 30000  // 30秒
 
@@ -508,73 +509,62 @@ void loop() {
 
 
 bool setupWiFi() {
-    Serial.print("連接到WiFi網絡: ");
+    Serial.print("正在連接到 WiFi 網絡: ");
     Serial.println(ssid);
     
     // 完全重置 WiFi
-    WiFi.persistent(false);
     WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
     delay(1000);
     
-    // 設置WiFi模式
+    // 設置 WiFi 模式
     WiFi.mode(WIFI_STA);
-    delay(1000);
     
     // 打印 MAC 地址
     Serial.print("ESP32 MAC 地址: ");
     Serial.println(WiFi.macAddress());
     
-    // 開始連接 - 增加重試次數
-    int retryCount = 0;
-    const int maxRetries = 3;
+    // 開始連接
+    WiFi.begin(ssid, password);
+    Serial.println("WiFi 連接中...");
     
-    while (retryCount < maxRetries) {
-        Serial.println("嘗試WiFi連接 #" + String(retryCount + 1));
+    // 設置連接嘗試計數
+    int attempts = 0;
+    const int maxAttempts = 20; // 最多嘗試 20 次
+    
+    // 等待連接
+    while (WiFi.status() != WL_CONNECTED && attempts < maxAttempts) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
         
-        WiFi.begin(ssid, password);
-        Serial.println("WiFi 連接中...");
-        
-        // 設置連接超時
-        unsigned long startAttemptTime = millis();
-        
-        // 等待連接或超時，每秒輸出一次狀態
-        while (WiFi.status() != WL_CONNECTED && 
-               millis() - startAttemptTime < WIFI_TIMEOUT) {
-            delay(1000);
-            Serial.print("WiFi 狀態: ");
+        // 每 5 次嘗試輸出一次狀態
+        if (attempts % 5 == 0) {
+            Serial.println("");
+            Serial.print("嘗試次數: ");
+            Serial.print(attempts);
+            Serial.print("/");
+            Serial.print(maxAttempts);
+            Serial.print(" - WiFi 狀態: ");
             printWiFiStatus(WiFi.status());
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("");
-            Serial.println("WiFi連接成功");
-            Serial.print("IP地址: ");
-            Serial.println(WiFi.localIP());
-            
-            // 測試網絡連接
-            Serial.println("測試網絡連接...");
-            if (testNetworkConnection()) {
-                return true;
-            } else {
-                Serial.println("網絡連接測試失敗，嘗試重新連接");
-                WiFi.disconnect();
-                delay(1000);
-                retryCount++;
-            }
-        } else {
-            Serial.println("");
-            Serial.println("WiFi連接失敗，嘗試重新連接");
-            WiFi.disconnect();
-            delay(2000);  // 等待更長時間再重試
-            retryCount++;
         }
     }
     
-    Serial.println("所有WiFi連接嘗試都失敗");
-    Serial.print("最終狀態: ");
-    printWiFiStatus(WiFi.status());
-    return false;
+    Serial.println("");
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("✅ WiFi 連接成功！");
+        Serial.print("IP 地址: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("信號強度: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+        return true;
+    } else {
+        Serial.println("❌ WiFi 連接失敗！");
+        Serial.print("最終狀態: ");
+        printWiFiStatus(WiFi.status());
+        return false;
+    }
 }
 
 // 新增函數：測試網絡連接
